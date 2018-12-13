@@ -4,16 +4,22 @@ import numpy as np
 import seaborn as sns
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression 
+from sklearn.linear_model import LinearRegression
+from sklearn import preprocessing
 import random
 import matplotlib.pyplot as plt
+import re
+import time
+import datetime
+from sklearn import svm
+from sklearn.svm import LinearSVC
 
 class MainClass:
 
     def __init__(self):
         df = pd.read_csv('files/googleplaystore.csv')
-        self.executePreProcessamento(df)
-        self.executeLinearRegression(df)
+        df = self.execute_pre_process(df)
+        self.execute_linear_regression(df)
         
     def change_size(self, size):
         if 'M' in size:
@@ -58,76 +64,109 @@ class MainClass:
         else:
             sizes = sizes.replace('M', '').replace('Varies with device', '0')
         return sizes
+    
+    def execute_pre_process(self, df):
+        # The best way to fill missing values might be using the median instead of mean.
+        df['Rating'] = df['Rating'].fillna(df['Rating'].median())
 
-    def executePreProcessamento(self, df):
-        CategoryString = df["Category"]
-        categoryVal = df["Category"].unique()
-        categoryValCount = len(categoryVal)
-        category_dict = {}
-        for i in range(0,categoryValCount):
-            category_dict[categoryVal[i]] = i
-        df["Category_c"] = df["Category"].map(category_dict).astype(int)
-        #print(df["Category_c"])
+        # Before filling null values we have to clean all non numerical values & unicode charachters 
+        replaces = [u'\u00AE', u'\u2013', u'\u00C3', u'\u00E3', u'\u00B3', '[', ']', "'"]
+        for i in replaces:
+            df['Current Ver'] = df['Current Ver'].astype(str).apply(lambda x : x.replace(i, ''))
+            df['Android Ver'] = df['Android Ver'].astype(str).apply(lambda x : x.replace(i, ''))
 
-        #filling Size which had NA
-        df["Size"] = df["Size"].map(self.change_size)
-        df.Size.fillna(method = 'ffill', inplace = True)
+        regex = [r'[-+|/:/;(_)@]', r'\s+', r'[A-Za-z]+']
+        for j in regex:
+            df['Current Ver'] = df['Current Ver'].astype(str).apply(lambda x : re.sub(j, '0', x))
+            df['Android Ver'] = df['Android Ver'].astype(str).apply(lambda x : re.sub(j, '0', x))
 
-        #Cleaning no of installs classification 
-        df['Installs'] = df['Installs'].map(self.installs_clean).astype(int)
-        #print(df['Installs'])
+        df['Current Ver'] = df['Current Ver'].astype(str).apply(lambda x : x.replace(',', '').replace('.', '').replace(',', '',0)).astype(float).astype(int)
+        df['Current Ver'] = df['Current Ver'].fillna(df['Current Ver'].median())
 
-        df['Type'] = df['Type'].map(self.type_cat)
-        #print(df['Type'])
+        df['Android Ver'] = df['Android Ver'].astype(str).apply(lambda x : x.replace(',', '').replace('.', '').replace(',', '',0)).astype(float).astype(int)
+        df['Android Ver'] = df['Android Ver'].fillna(df['Android Ver'].median())
 
-        #Cleaning of content rating classification
-        RatingL = df['Content Rating'].unique()
-        RatingDict = {}
-        for i in range(len(RatingL)):
-            RatingDict[RatingL[i]] = i
-        df['Content Rating'] = df['Content Rating'].map(RatingDict).astype(int)
-        #print(df['Content Rating'])
+        df['Category'].unique()
 
-        df.drop(labels = ['Last Updated','Current Ver','Android Ver','App'], axis = 1, inplace = True)
+        i = df[df['Category'] == '1.9'].index
+        df.loc[i]
 
-        #Cleaning of genres
-        GenresL = df.Genres.unique()
-        GenresDict = {}
-        for i in range(len(GenresL)):
-            GenresDict[GenresL[i]] = i
-        df['Genres_c'] = df['Genres'].map(GenresDict).astype(int)
-        #print(df['Genres_c'])
+        df = df.drop(i)
 
+        df = df[pd.notnull(df['Last Updated'])]
+        df = df[pd.notnull(df['Content Rating'])]
+
+        # App values encoding
+        le = preprocessing.LabelEncoder()
+        df['App'] = le.fit_transform(df['App'])
+        # This encoder converts the values into numeric values
+
+        # Category features encoding
+        category_list = df['Category'].unique().tolist() 
+        category_list = ['cat_' + word for word in category_list]
+        df = pd.concat([df, pd.get_dummies(df['Category'], prefix='cat')], axis=1)
+
+        # Genres features encoding
+        le = preprocessing.LabelEncoder()
+        df['Genres'] = le.fit_transform(df['Genres'])
+
+        # Encode Content Rating features
+        le = preprocessing.LabelEncoder()
+        df['Content Rating'] = le.fit_transform(df['Content Rating'])
+
+        # Price cealning
+        df['Price'] = df['Price'].apply(lambda x : x.strip('$'))
+
+        # Installs cealning
+        df['Installs'] = df['Installs'].apply(lambda x : x.strip('+').replace(',', ''))
+
+        # Type encoding
+        df['Type'] = pd.get_dummies(df['Type'])
+
+
+        # Last Updated encoding
+        df['Last Updated'] = df['Last Updated'].apply(lambda x : time.mktime(datetime.datetime.strptime(x, '%B %d, %Y').timetuple()))
+
+
+        # Size cealning
+        df['Size'] = df['Size'].apply(lambda x: x.strip('M').strip('k'))
+        df[df['Size'] == 'Varies with device'] = 0
+
+        df = df.drop(columns=['Category'])
+
+        # df.to_csv('results.csv')
+
+        features = ['App', 'Reviews', 'Size', 'Installs', 'Type', 'Price', 'Content Rating', 'Genres', 'Last Updated', 'Current Ver']
+        features.extend(category_list)
+        self.x = df[features]
+        self.y = df['Rating']
         
-        df['Price'] = df['Price'].map(self.price_clean).astype(float)
-
-
-        #print(df['Price'])
-        #df.info()
-
-        df['Reviews'] = df['Reviews'].map(self.change_size)
-        df.Reviews.fillna(method = 'ffill', inplace = True)
-        #df['Reviews'] = df['Reviews'].astype(int)
-        #print(df['Reviews'])
+        return df
         
-        df.info()
 
+    def execute_linear_regression(self, df):
+        x_train, x_test, y_train, y_test = train_test_split(self.x, self.y, test_size=0.25, random_state=10)
+        
+        lab_enc = preprocessing.LabelEncoder()
+        y_train_encoded = lab_enc.fit_transform(y_train)
+        y_test_encoded = lab_enc.fit_transform(y_test)
+           
+        # Init - Test others parameters
+            
+        for this_C in [1,3,5,20,80,120,160,200]:
+            clf2 = LinearSVC(C=this_C).fit(x_train,y_train_encoded)
+            scoretrain = clf2.score(x_train,y_train_encoded)
+            scoretest  = clf2.score(x_test,y_test_encoded)
+            print("Linear SVM value of C:{}, training score :{:2f} , Test Score: {:2f} \n".format(this_C,scoretrain,scoretest))
+            
+        # End - Test others parameters
 
-
-    def executeLinearRegression(self, df):
-        X = df.drop(labels = ['Category','Rating','Genres','Genres_c'],axis = 1)
-        y = df.Rating
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.30)
-        model = LinearRegression()
-        model.fit(X_train,y_train)
-        Results = model.predict(X_test)
-
-    def Evaluationmatrix(self, y_true, y_predict):
+    def evaluation_matrix(self, y_true, y_predict):
         print ('Mean Squared Error: '+ str(metrics.mean_squared_error(y_true,y_predict)))
         print ('Mean absolute Error: '+ str(metrics.mean_absolute_error(y_true,y_predict)))
         print ('Mean squared Log Error: '+ str(metrics.mean_squared_log_error(y_true,y_predict)))
 
-    def Evaluationmatrix_dict(self, y_true, y_predict, name = 'Linear - Integer'):
+    def evaluation_matrix_dict(self, y_true, y_predict, name = 'Linear - Integer'):
         dict_matrix = {}
         dict_matrix['Series Name'] = name
         dict_matrix['Mean Squared Error'] = metrics.mean_squared_error(y_true,y_predict)
